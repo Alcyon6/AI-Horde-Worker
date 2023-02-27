@@ -1,4 +1,5 @@
 """Get and process a job from the horde"""
+import os
 import base64
 import time
 import traceback
@@ -370,11 +371,38 @@ class StableDiffusionHordeJob(HordeJobFramework):
             logger.debug("R2 Upload response: {}", put_response)
         else:
             generation = base64.b64encode(buffer.getvalue()).decode("utf8")
+
+        # Save the image to /mnt/ramdisk
+        # Determine the next available filename in the directory
+        save_dir = "/mnt/ramdisk/"
+        os.makedirs(save_dir, exist_ok=True)
+        max_file_num = 0
+        for filename in os.listdir(save_dir):
+            if filename.endswith(".png"):
+                num, seed = filename[:-4].split("-") if "-" in filename[:-4] else (filename[:-4], "")
+                max_file_num = max(max_file_num, int(num))
+        next_file_num = max_file_num + 1
+        seed = str(self.current_payload["seed"])
+
+        # Save the image with the next available filename
+        filename = f"{next_file_num:04d}-{seed}.png"
+        save_path = os.path.join(save_dir, filename)
+        self.image.save(save_path, format="PNG")
+        logger.debug(f"Image saved to {save_path}")
+
+        # Save the txt file with the same base filename as the png file
+        txt_dir = "/mnt/ramdisk/txt"
+        os.makedirs(txt_dir, exist_ok=True)
+        with open(os.path.join(txt_dir, filename + ".txt"), "w") as f:
+            for key, value in self.current_payload.items():
+                f.write(f"{key}: {value}\n")
+
         self.submit_dict = {
             "id": self.current_id,
             "generation": generation,
             "seed": self.seed,
         }
+        
         if self.censored:
             self.submit_dict["state"] = "censored"
 
