@@ -1,8 +1,8 @@
-This repository allows you to set up a Stable Horde Worker to generate or interrogate images for others
+This repository allows you to set up a AI Horde Worker to generate or alchemize images for others
 
-# Stable Horde Worker
+# AI Horde Worker
 
-This repo contains the latest implementation for the [Stable Horde](https://stablehorde.net) Worker. This will turn your graphics card(s) into a worker for the Stable Horde and you will receive in turn kudos which will give you priority for your own generations.
+This repo contains the latest implementation for the [AI Horde](https://aihorde.net) Worker. This will turn your graphics card(s) into a worker for the AI Horde and you will receive in turn kudos which will give you priority for your own generations.
 
 Alternatively you can become an interrogation worker which is much more lightweight and can even run on CPU (i.e. without a GPU)
 
@@ -10,7 +10,7 @@ To run the bridge, simply follow the instructions for your own OS
 
 # Installing
 
-If you haven't already, go to [stable horde and register an account](https://stablehorde.net/register), then store your API key somewhere secure. You will need it later in these instructions.
+If you haven't already, go to [AI Horde and register an account](https://aihorde.net/register), then store your API key somewhere secure. You will need it later in these instructions.
 
 This will allow your worker to gather kudos for your account.
 
@@ -68,23 +68,21 @@ This script can take 10-15 minutes to complete.
 
 In order to connect to the horde with your username and a good worker name, you need to configure your horde bridge. To this end, we've developed an easy WebUI you can use
 
-To load it, simply run `bridge-webui`. It will then show you a URL you can open with your browser. Open it and it will allow you to tweak all horde options. Once you press `Update Bridge` it will create a `bridgeData.py` file with all the options you set.
+To load it, simply run `bridge-webui`. It will then show you a URL you can open with your browser. Open it and it will allow you to tweak all horde options. Once you press `Update Bridge` it will create a `bridgeData.yaml` file with all the options you set.
 
 Fill in at least:
    * Your worker name (has to be unique horde-wide)
-   * Your stable horde API key
+   * Your AI Horde API key
 
 You can use this UI and update your bridge settings even while your worker is running. Your worker should then pick up the new settings within 60 seconds.
 
-You can also edit this file using a text editor. We also provide a `bridgeData_template.py` with comments on each option which you can copy into a new `bridgeData.py` file. This info should soon be onboarded onto the webui as well.
+You can also edit this file using a text editor. We also provide a `bridgeData_template.yaml` with comments on each option which you can copy into a new `bridgeData.yaml` file. This info should soon be onboarded onto the webui as well.
 
 ## Startup
 
 Start your worker, depending on which type your want.
 
 * If you want to generate Stable Diffusion images for others, run `horde-bridge`.
-
-    **Note:** In order for your worker to work, it needs to download a stable diffusion model. To do that, you will need to register a free account at https://huggingface.co. You will need to put your username and password for it when prompted. You will also need to accept the license of the model you're about to download, so after logging in to huggingface, visit https://huggingface.co/runwayml/stable-diffusion-v1-5 and accept the license presented within.
 
     **Warning:** This requires a powerful GPU. You will need a GPU with at least 6G VRAM. If you do not have at least 20G or RAM, append `--disable_voodoo` to your startup command above! If you do not have at least 6Gb of swap, also `--disable_voodoo`!
 * If you want to interrogate images for other, run `horde-interrogation_bridge`. This worker is very lightweight and you can even run it with just CPU (but you'll have to adjust which forms you serve)
@@ -106,7 +104,7 @@ etc
 
 # Updating
 
-The stable horde workers are under constant improvement. In case there is more recent code to use follow these steps to update
+The AI Horde workers are under constant improvement. In case there is more recent code to use follow these steps to update
 
 First step: Shut down your worker by putting it into maintenance, and then pressing ctrl+c
 

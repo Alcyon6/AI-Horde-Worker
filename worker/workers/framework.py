@@ -1,9 +1,13 @@
 """This is the worker, it's the main workhorse that deals with getting requests, and spawning data processing"""
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from nataili.util.logger import logger
+
+from worker.stats import bridge_stats
+from worker.ui import TerminalUI
 
 
 class WorkerFramework:
@@ -19,6 +23,8 @@ class WorkerFramework:
         self.consecutive_executor_restarts = 0
         self.consecutive_failed_jobs = 0
         self.executor = None
+        self.ui = None
+        self.last_stats_time = time.time()
         self.reload_data()
         logger.stats("Starting new stats session")
         # These two should be filled in by the extending classes
@@ -28,17 +34,29 @@ class WorkerFramework:
     @logger.catch(reraise=True)
     def start(self):
         self.exit_rc = 1
+
+        # Setup UI if requested
+        if self.bridge_data.enable_terminal_ui:
+            # Don't allow this if auto-downloading is not enabled as how will the user see download prompts?
+            if not self.bridge_data.always_download:
+                logger.warning("Terminal UI can not be enabled without also enabling 'always_download'")
+            else:
+                ui = TerminalUI(self.bridge_data.worker_name, self.bridge_data.api_key, self.bridge_data.horde_url)
+                self.ui = threading.Thread(target=ui.run, daemon=True)
+                self.ui.start()
+
         while True:  # This is just to allow it to loop through this and handle shutdowns correctly
             self.should_restart = False
             self.consecutive_failed_jobs = 0
             with ThreadPoolExecutor(max_workers=self.bridge_data.max_threads) as self.executor:
-                while True:
-                    if self.should_stop:
-                        break
+                while not self.should_stop:
                     if self.should_restart:
                         self.executor.shutdown(wait=False)
                         break
                     try:
+                        if self.ui and not self.ui.is_alive():
+                            # UI Exited, we should probably exit
+                            raise KeyboardInterrupt
                         self.process_jobs()
                     except KeyboardInterrupt:
                         self.should_stop = True
@@ -58,9 +76,8 @@ class WorkerFramework:
         if len(self.waiting_jobs) < self.bridge_data.queue_size:
             self.add_job_to_queue()
         # Start new jobs
-        while len(self.running_jobs) < self.bridge_data.max_threads:
-            if not self.start_job():
-                break
+        while len(self.running_jobs) < self.bridge_data.max_threads and self.start_job():
+            pass
         # Check if any jobs are done
         for job_thread, start_time, job in self.running_jobs:
             self.check_running_job_status(job_thread, start_time, job)
@@ -77,8 +94,7 @@ class WorkerFramework:
     def add_job_to_queue(self):
         """Picks up a job from the horde and adds it to the local queue
         Returns the job object created, if any"""
-        jobs = self.pop_job()
-        if jobs:
+        if jobs := self.pop_job():
             self.waiting_jobs.extend(jobs)
 
     def pop_job(self):
@@ -101,10 +117,8 @@ class WorkerFramework:
         job = None
         # Queue disabled
         if self.bridge_data.queue_size == 0:
-            jobs = self.pop_job()
-            if jobs:
+            if jobs := self.pop_job():
                 job = jobs[0]
-        # Queue enabled
         elif len(self.waiting_jobs) > 0:
             job = self.waiting_jobs.pop(0)
         else:
@@ -122,19 +136,20 @@ class WorkerFramework:
         """Polls the AI Horde for new jobs and creates a Job class"""
         runtime = time.monotonic() - start_time
         if job_thread.done():
-            if job_thread.exception(timeout=1):
-                logger.error("Job failed with exception, {}", job_thread.exception())
-                logger.exception(job_thread.exception())
+            if job_thread.exception(timeout=1) or job.is_faulted():
+                if job_thread.exception(timeout=1):
+                    logger.error("Job failed with exception, {}", job_thread.exception())
+                    logger.exception(job_thread.exception())
                 if self.consecutive_executor_restarts > 0:
                     logger.critical(
-                        "Worker keeps crashing after thread executor restart. " "Cannot be salvaged. Aborting!"
+                        "Worker keeps crashing after thread executor restart. " "Cannot be salvaged. Aborting!",
                     )
                     self.should_stop = True
                     return
                 self.consecutive_failed_jobs += 1
                 if self.consecutive_failed_jobs >= 5:
                     logger.critical(
-                        "Too many consecutive jobs have failed. " "Restarting thread executor and hope we recover..."
+                        "Too many consecutive jobs have failed. " "Restarting thread executor and hope we recover...",
                     )
                     self.should_restart = True
                     self.consecutive_executor_restarts += 1
@@ -159,6 +174,14 @@ class WorkerFramework:
                 job_thread.cancel()
             self.should_restart = True
             return
+
+        # Check periodically if any interesting stats should be announced
+        if self.bridge_data.stats_output_frequency and time.time() - self.last_stats_time > min(
+            self.bridge_data.stats_output_frequency,
+            30,
+        ):
+            self.last_stats_time = time.time()
+            logger.info(f"Estimated average kudos per hour: {bridge_stats.stats.get('kudos_per_hour', 0)}")
 
     def reload_data(self):
         """This is just a utility function to reload the configuration"""

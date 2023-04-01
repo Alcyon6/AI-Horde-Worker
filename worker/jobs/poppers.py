@@ -8,7 +8,7 @@ import requests
 from nataili.util.logger import logger
 from PIL import Image, UnidentifiedImageError
 
-from worker.consts import BRIDGE_VERSION
+from worker.consts import BRIDGE_VERSION, KNOWN_INTERROGATORS, KNOWN_POST_PROCESSORS, POST_PROCESSORS_NATAILI_MODELS
 
 
 class JobPopper:
@@ -40,38 +40,38 @@ class JobPopper:
         except requests.exceptions.ConnectionError:
             logger.warning(f"Server {self.bridge_data.horde_url} unavailable during pop. Waiting 10 seconds...")
             time.sleep(10)
-            return
+            return None
         except TypeError:
             logger.warning(f"Server {self.bridge_data.horde_url} unavailable during pop. Waiting 2 seconds...")
             time.sleep(2)
-            return
+            return None
         except requests.exceptions.ReadTimeout:
             logger.warning(f"Server {self.bridge_data.horde_url} timed out during pop. Waiting 2 seconds...")
             time.sleep(2)
-            return
+            return None
         except requests.exceptions.InvalidHeader:
             logger.warning(
                 f"Server {self.bridge_data.horde_url} Something is wrong with the API key you are sending. "
-                "Please check your bridgeData api_key variable. Waiting 10 seconds..."
+                "Please check your bridgeData api_key variable. Waiting 10 seconds...",
             )
             time.sleep(10)
-            return
+            return None
 
         try:
             self.pop = pop_req.json()  # I'll use it properly later
         except json.decoder.JSONDecodeError:
             logger.error(
                 f"Could not decode response from {self.bridge_data.horde_url} as json. "
-                "Please inform its administrator!"
+                "Please inform its administrator!",
             )
             time.sleep(2)
-            return
+            return None
         if not pop_req.ok:
             logger.warning(f"{self.pop['message']} ({pop_req.status_code})")
             if "errors" in self.pop:
                 logger.warning(f"Detailed Request Errors: {self.pop['errors']}")
             time.sleep(2)
-            return
+            return None
         return [self.pop]
 
     def report_skipped_info(self):
@@ -88,7 +88,7 @@ class JobPopper:
         try:
             with requests.get(image_url, stream=True, timeout=2) as r:
                 size = r.headers.get("Content-Length", 0)
-                if int(size) / 1024 > 5000:
+                if int(size) > 5120000:
                     logger.error(f"Provided image ({image_url}) cannot be larger than 5Mb")
                     return None
                 mbs = 0
@@ -123,7 +123,14 @@ class StableDiffusionPopper(JobPopper):
         super().__init__(mm, bd)
         self.endpoint = "/api/v2/generate/pop"
         self.available_models = self.model_manager.get_loaded_models_names()
-        for util_model in ["LDSR", "safety_checker", "GFPGAN", "RealESRGAN_x4plus", "CodeFormers"]:
+        for util_model in (
+            list(KNOWN_INTERROGATORS)
+            + list(POST_PROCESSORS_NATAILI_MODELS)
+            + [
+                "LDSR",
+                "safety_checker",
+            ]
+        ):
             if util_model in self.available_models:
                 self.available_models.remove(util_model)
         self.pop_payload = {
@@ -146,10 +153,10 @@ class StableDiffusionPopper(JobPopper):
 
     def horde_pop(self):
         if not super().horde_pop():
-            return
+            return None
         if not self.pop.get("id"):
             self.report_skipped_info()
-            return
+            return None
         # In the stable diffusion popper, the whole return is always a single payload, so we return it as a list
         self.pop["source_image"] = self.download_source(self.pop.get("source_image"))
         self.pop["source_mask"] = self.download_source(self.pop.get("source_mask"))
@@ -159,19 +166,18 @@ class StableDiffusionPopper(JobPopper):
         if not source_img:
             return None
         if "https" in source_img:
-            img_data = self.download_image_data(source_img)
-            if img_data:
+            if img_data := self.download_image_data(source_img):
                 img = self.convert_image_data_to_pil(img_data)
                 if not img:
                     logger.error("Non-image data when downloading image! Ignoring")
                 return img
-            else:
-                logger.warning(f"Could not download source image from R2 {source_img}. Skipping source image.")
-                return None
-        else:
-            base64_bytes = source_img.encode("utf-8")
-            img_bytes = base64.b64decode(base64_bytes)
-            return Image.open(BytesIO(img_bytes))
+
+            logger.warning(f"Could not download source image from R2 {source_img}. Skipping source image.")
+            return None
+
+        base64_bytes = source_img.encode("utf-8")
+        img_bytes = base64.b64decode(base64_bytes)
+        return Image.open(BytesIO(img_bytes))
 
 
 class InterrogationPopper(JobPopper):
@@ -180,19 +186,15 @@ class InterrogationPopper(JobPopper):
         self.endpoint = "/api/v2/interrogate/pop"
         available_forms = []
         self.available_models = self.model_manager.get_loaded_models_names()
-        for util_model in ["LDSR", "GFPGAN", "RealESRGAN_x4plus", "CodeFormers"]:
-            if util_model in self.available_models:
-                self.available_models.remove(util_model)
         if "BLIP_Large" in self.available_models:
             available_forms.append("caption")
         if "safety_checker" in self.available_models:
             available_forms.append("nsfw")
         if "ViT-L/14" in self.available_models:
             available_forms.append("interrogation")
-        # Avoid div/0
-        amount = 1
-        if self.bridge_data.queue_size > 1:
-            amount = self.bridge_data.queue_size
+        if "post-process" in bd.forms:
+            available_forms.extend(list(KNOWN_POST_PROCESSORS))
+        amount = max(self.bridge_data.queue_size, 1)
         self.pop_payload = {
             "name": self.bridge_data.worker_name,
             "forms": available_forms,
@@ -201,14 +203,16 @@ class InterrogationPopper(JobPopper):
             "threads": self.bridge_data.max_threads,
             "bridge_version": BRIDGE_VERSION,
             "bridge_agent": self.BRIDGE_AGENT,
+            "max_tiles": self.bridge_data.max_power,
         }
+        logger.debug(self.pop_payload)
 
     def horde_pop(self):
         if not super().horde_pop():
-            return
+            return None
         if not self.pop.get("forms"):
             self.report_skipped_info()
-            return
+            return None
         # In the interrogation popper, the forms key contains an array of payloads to execute
         current_image_url = None
         non_faulted_forms = []
@@ -219,7 +223,7 @@ class InterrogationPopper(JobPopper):
                 try:
                     with requests.get(current_image_url, stream=True, timeout=2) as r:
                         size = r.headers.get("Content-Length", 0)
-                        if int(size) / 1024 > 5000:
+                        if int(size) > 5120000:
                             logger.error(f"Provided image ({current_image_url}) cannot be larger than 5Mb")
                             current_image_url = None
                             continue

@@ -3,6 +3,13 @@ import argparse
 
 arg_parser = argparse.ArgumentParser()
 arg_parser.add_argument(
+    "-p",
+    "--max_power",
+    type=int,
+    required=False,
+    help="How much power this instance has to generate or alchemize images. Min: 2",
+)
+arg_parser.add_argument(
     "-i",
     "--interval",
     action="store",
@@ -122,13 +129,26 @@ arg_parser.add_argument(
     "--yes",
     action="store_true",
     required=False,
-    help="Specify this argument to autodownload all missing models defined in your bridgeData.py",
+    help="Specify this argument to autodownload all missing models defined in your bridgeData.yaml",
 )
+# TODO: Remove arg after fully deprecating.
 arg_parser.add_argument(
     "--skip_md5",
     action="store_true",
     default=False,
     help="If specified will not check the downloaded model md5sum.",
+)
+arg_parser.add_argument(
+    "--skip_checksum",
+    action="store_true",
+    default=False,
+    help="If specified will not check the downloaded model sha256sum.",
+)
+arg_parser.add_argument(
+    "--enable_model_cache",
+    action="store_true",
+    default=False,
+    help="If specified will use an alternative to ray to cache models persistently.",
 )
 
 

@@ -17,7 +17,10 @@ class StableDiffusionWorker(WorkerFramework):
 
     # Setting it as it's own function so that it can be overriden
     def can_process_jobs(self):
-        can_do = len(self.model_manager.get_loaded_models_names()) > 0
+        loaded_models = len(self.model_manager.compvis.get_loaded_models_names()) + len(
+            self.model_manager.diffusers.get_loaded_models_names(),
+        )
+        can_do = loaded_models > 0
         if not can_do:
             logger.info("No models loaded. Waiting for the first model to be up before polling the horde")
         return can_do
@@ -25,25 +28,20 @@ class StableDiffusionWorker(WorkerFramework):
     # We want this to be extendable as well
     def add_job_to_queue(self):
         job = super().add_job_to_queue()
-        if job:
+        if job and job.current_model not in self.bridge_data.model_names:
             # The job sends the current models loaded in the MM to
             # the horde. That model might end up unloaded if it's dynamic
             # so we need to ensure it will be there next iteration.
-            if job.current_model not in self.bridge_data.model_names:
-                self.bridge_data.model_names.append(job.current_model)
+            self.bridge_data.model_names.append(job.current_model)
 
     def pop_job(self):
         return super().pop_job()
 
     def get_running_models(self):
-        running_models = []
-        for job_thread, start_time, job in self.running_jobs:
-            running_models.append(job.current_model)
-        # logger.debug(running_models)
-        return running_models
+        return [job.current_model for job_thread, start_time, job in self.running_jobs]
 
     def calculate_dynamic_models(self):
-        all_models_data = requests.get(self.bridge_data.horde_url + "/api/v2/status/models", timeout=10).json()
+        all_models_data = requests.get(f"{self.bridge_data.horde_url}/api/v2/status/models", timeout=10).json()
         # We remove models with no queue from our list of models to load dynamically
         models_data = [md for md in all_models_data if md["queued"] > 0]
         models_data.sort(key=lambda x: (x["eta"], x["queued"]), reverse=True)
@@ -59,10 +57,9 @@ class StableDiffusionWorker(WorkerFramework):
         # as we may run out of RAM/VRAM.
         # So we reduce the amount of dynamic models
         # based on how many previous dynamic models we need to keep loaded
-        needed_previous_dynamic_models = 0
-        for model_name in running_models:
-            if model_name not in self.bridge_data.predefined_models:
-                needed_previous_dynamic_models += 1
+        needed_previous_dynamic_models = sum(
+            model_name not in self.bridge_data.predefined_models for model_name in running_models
+        )
         for model in models_data:
             if model["name"] in self.bridge_data.models_to_skip:
                 continue

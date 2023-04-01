@@ -23,6 +23,7 @@ class HordeJobFramework:
         self.loop_retry = 0
         self.status = JobStatus.INIT
         self.start_time = time.time()
+        self.process_time = time.time()
         self.stale_time = None
         self.submit_dict = {}
         self.headers = {"apikey": self.bridge_data.api_key}
@@ -50,6 +51,10 @@ class HordeJobFramework:
             return False
         return time.time() > self.stale_time
 
+    def is_faulted(self):
+        """Check if the job is faulted"""
+        return self.status == JobStatus.FAULTED
+
     @logger.catch(reraise=True)
     def start_job(self):
         """Starts a job from a pop request
@@ -61,12 +66,13 @@ class HordeJobFramework:
 
         if self.pop is None:
             logger.error(
-                f"Something has gone wrong with {self.bridge_data.horde_url}. Please inform its administrator!"
+                f"Something has gone wrong with {self.bridge_data.horde_url}. Please inform its administrator!",
             )
             time.sleep(self.retry_interval)
             self.status = JobStatus.FAULTED
             # The extended function should return as well
             return
+        self.process_time = time.time()
         self.status = JobStatus.WORKING
         # Continue with the specific worker logic from here
         # At the end, you must call self.start_submit_thread()
@@ -102,7 +108,7 @@ class HordeJobFramework:
             self.loop_retry += 1
             try:
                 logger.debug(
-                    f"posting payload with size of {round(sys.getsizeof(json.dumps(self.submit_dict)) / 1024,1)} kb"
+                    f"posting payload with size of {round(sys.getsizeof(json.dumps(self.submit_dict)) / 1024,1)} kb",
                 )
                 submit_req = requests.post(
                     self.bridge_data.horde_url + endpoint,
@@ -116,7 +122,7 @@ class HordeJobFramework:
                 except json.decoder.JSONDecodeError:
                     logger.error(
                         f"Something has gone wrong with {self.bridge_data.horde_url} during submit. "
-                        f"Please inform its administrator!  (Retry {self.loop_retry}/10)"
+                        f"Please inform its administrator!  (Retry {self.loop_retry}/10)",
                     )
                     time.sleep(self.retry_interval)
                     continue
@@ -125,17 +131,29 @@ class HordeJobFramework:
                     self.status = JobStatus.FAULTED
                     break
                 if not submit_req.ok:
+                    if submit_req.status_code == 400:
+                        logger.warning(
+                            f"During gen submit, server {self.bridge_data.horde_url} "
+                            f"responded with status code {submit_req.status_code}: "
+                            f"Job took {round(time.time() - self.start_time,1)} seconds since queued "
+                            f"and {round(time.time() - self.process_time,1)} since start."
+                            f"{submit['message']}. Aborting job!",
+                        )
+                        self.status = JobStatus.FAULTED
+                        break
                     logger.warning(
                         f"During gen submit, server {self.bridge_data.horde_url} "
                         f"responded with status code {submit_req.status_code}: "
-                        f"{submit['message']}. Waiting for 2 seconds...  (Retry {self.loop_retry}/10)"
+                        f"{submit['message']}. Waiting for 2 seconds...  (Retry {self.loop_retry}/10)",
                     )
                     if "errors" in submit:
                         logger.warning(f"Detailed Request Errors: {submit['errors']}")
                     time.sleep(2)
                     continue
                 logger.info(
-                    f'Submitted job with id {self.current_id} and contributed for {submit_req.json()["reward"]}'
+                    f'Submitted job with id {self.current_id} and contributed for {submit_req.json()["reward"]}. '
+                    f"Job took {round(time.time() - self.start_time,1)} seconds since queued "
+                    f"and {round(time.time() - self.process_time,1)} since start.",
                 )
                 self.post_submit_tasks(submit_req)
                 self.status = JobStatus.DONE
@@ -143,14 +161,14 @@ class HordeJobFramework:
             except requests.exceptions.ConnectionError:
                 logger.warning(
                     f"Server {self.bridge_data.horde_url} unavailable during submit. "
-                    f"Waiting 10 seconds...  (Retry {self.loop_retry}/10)"
+                    f"Waiting 10 seconds...  (Retry {self.loop_retry}/10)",
                 )
                 time.sleep(10)
                 continue
             except requests.exceptions.ReadTimeout:
                 logger.warning(
                     f"Server {self.bridge_data.horde_url} timed out during submit. "
-                    f"Waiting 10 seconds...  (Retry {self.loop_retry}/10)"
+                    f"Waiting 10 seconds...  (Retry {self.loop_retry}/10)",
                 )
                 time.sleep(10)
                 continue
@@ -162,4 +180,3 @@ class HordeJobFramework:
 
     def post_submit_tasks(self, submit_req):
         """Optional job which will execute only if the submit is successfull"""
-        pass
